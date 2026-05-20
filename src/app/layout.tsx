@@ -13,10 +13,9 @@ async function NavBar() {
   return (
     <header className="border-b border-[var(--border)] bg-[var(--bg-elev)]">
       <div className="mx-auto flex max-w-6xl items-center justify-between px-6 py-4">
-        <Link href="/" className="flex items-center gap-3 no-underline text-[var(--fg)]">
+        <Link href="/" className="flex items-center no-underline text-[var(--fg)]">
           {/* eslint-disable-next-line @next/next/no-img-element */}
-          <img src="/images/BMAsia_Logo.png" alt="BMAsia" className="h-8 w-auto" />
-          <span className="text-base font-semibold tracking-tight">SYB Monitor</span>
+          <img src="/images/BMAsia_Logo.png" alt="BMAsia" className="h-9 w-auto" />
         </Link>
         {session.isLoggedIn ? (
           <nav className="flex items-center gap-6 text-sm">
