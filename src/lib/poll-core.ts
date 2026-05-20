@@ -204,8 +204,17 @@ export async function pollOneAccount(accountId: string): Promise<PollResult> {
       });
     }
 
-    // Fire notification (skip if alert was auto-resolved as matches-baseline)
-    if (resolution !== "ignored:matches-baseline") {
+    // Chat notification policy ("Mode B"):
+    //   - Skip when auto-revert handled it cleanly (resolution=auto-reverted)
+    //     — the audit row still exists at /alerts but no Chat ping
+    //   - Skip when the new source already matched baseline (no-op drift)
+    //   - Always Chat for non-drift events (ACCOUNT_SETTING_CHANGED,
+    //     DEVICE_UNPAIRED, TRACK_BLOCKED, etc.) and drift that wasn't
+    //     auto-reverted (either autoRevert OFF, or revert failed)
+    const skipChat =
+      resolution === "auto-reverted" || resolution === "ignored:matches-baseline";
+
+    if (!skipChat) {
       const fresh = await prisma.alert.findUniqueOrThrow({ where: { id: alert.id } });
       const dispatch = await dispatchAlert({
         account: {
