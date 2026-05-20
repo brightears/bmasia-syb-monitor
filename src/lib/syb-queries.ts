@@ -342,7 +342,7 @@ export async function mutateAccountSettings(
 const ZONE_UPDATE_SETTINGS = `
   mutation SoundZoneUpdateSettings($input: SoundZoneUpdateSettingsInput!) {
     soundZoneUpdateSettings(input: $input) {
-      soundZones { id settings { staffControl } }
+      soundZones
       settings { staffControl }
     }
   }
@@ -361,7 +361,7 @@ export async function mutateZoneSettings(
 const ZONE_ASSIGN_SOURCE = `
   mutation SoundZoneAssignSource($input: SoundZoneAssignSourceInput!) {
     soundZoneAssignSource(input: $input) {
-      soundZones { id }
+      soundZones
       source { __typename ... on Playlist { id name } ... on Schedule { id name } }
     }
   }
@@ -373,7 +373,7 @@ export async function mutateAssignSource(
 ): Promise<{ id: string; name?: string; typeName?: string } | null> {
   const soundZones = Array.isArray(zoneIdOrIds) ? zoneIdOrIds : [zoneIdOrIds];
   const data = await graphql<{
-    soundZoneAssignSource: { soundZones: { id: string }[]; source: any };
+    soundZoneAssignSource: { soundZones: string[]; source: any };
   }>(ZONE_ASSIGN_SOURCE, {
     input: { soundZones, source: sourceId },
   });
