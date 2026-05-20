@@ -1,0 +1,123 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+model User {
+  id           Int      @id @default(autoincrement())
+  email        String   @unique
+  passwordHash String
+  name         String?
+  role         String   @default("operator") // operator | admin
+  createdAt    DateTime @default(now())
+  updatedAt    DateTime @updatedAt
+}
+
+model Account {
+  id                String   @id // SYB account ID
+  businessName      String
+  monitored         Boolean  @default(false)
+  autoRevertEnabled Boolean  @default(false)
+  preventionApplied Boolean  @default(false)
+
+  // alert routing — channel ids; falls back to env defaults when null
+  chatSpaceId    String?
+  telegramChatId String?
+
+  // polling state
+  lastPolledAt DateTime?
+  lastCursor   String?
+
+  onboardedAt DateTime?
+  createdAt   DateTime  @default(now())
+  updatedAt   DateTime  @updatedAt
+
+  zones           Zone[]
+  alerts          Alert[]
+  appliedSettings AppliedSetting[]
+
+  @@index([monitored])
+}
+
+model Zone {
+  id                   String  @id // SYB zone ID
+  accountId            String
+  name                 String
+  monitored            Boolean @default(false)
+
+  // Approved baseline
+  approvedPlayFromId   String?
+  approvedPlayFromType String? // playlist | schedule
+  approvedPlayFromName String?
+  baselineCapturedAt   DateTime?
+
+  // Last-observed state
+  lastSeenPlayFromId   String?
+  lastSeenPlayFromName String?
+  driftDetectedAt      DateTime?
+
+  // Prevention settings status
+  staffControlLocked   Boolean @default(false)
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  account Account @relation(fields: [accountId], references: [id], onDelete: Cascade)
+  alerts  Alert[]
+
+  @@index([accountId])
+  @@index([accountId, monitored])
+}
+
+model Alert {
+  id           String   @id @default(uuid())
+  syblogId     String   @unique // ActivityLogItem.id — idempotency key
+  accountId    String
+  zoneId       String?
+
+  action       String   // PLAY_FROM_CHANGED | ACCOUNT_SETTING_CHANGED | DEVICE_UNPAIRED | TRACK_BLOCKED | ...
+  description  String?
+
+  actorType    String   // DeviceActor | UserActor | ActivityLogUserActor | InternalActor
+  actorName    String?
+  actorEmail   String?
+  actorRaw     Json?    // full actor payload for forensics
+
+  diffOld      Json?
+  diffNew      Json?
+
+  timestamp    DateTime
+  severity     String   @default("warn") // info | warn | critical
+  resolvedAt   DateTime?
+  resolution   String?  // auto-reverted | manual-reverted | acknowledged | ignored
+  resolutionNote String?
+  resolvedBy   String?  // user email
+
+  createdAt    DateTime @default(now())
+
+  account Account @relation(fields: [accountId], references: [id], onDelete: Cascade)
+  zone    Zone?   @relation(fields: [zoneId], references: [id], onDelete: SetNull)
+
+  @@index([accountId, timestamp])
+  @@index([resolvedAt])
+  @@index([action])
+}
+
+model AppliedSetting {
+  // Track which prevention settings we've applied so we can detect tamper
+  id          String   @id @default(uuid())
+  accountId   String
+  scope       String   // "account" | "zone:<id>"
+  settingName String
+  value       String
+  appliedAt   DateTime @default(now())
+  appliedBy   String?  // user email or "cron"
+
+  account Account @relation(fields: [accountId], references: [id], onDelete: Cascade)
+
+  @@index([accountId, settingName])
+}
