@@ -85,35 +85,12 @@ export async function applyPrevention(
     });
   }
 
-  // 2) per monitored zone: staffControl=false
-  for (const zone of acc.zones) {
-    if (!zone.monitored) {
-      result.zonesSkipped.push(zone.id);
-      continue;
-    }
-    try {
-      await mutateZoneSettings(zone.id, { staffControl: false });
-      await prisma.appliedSetting.create({
-        data: {
-          accountId,
-          scope: `zone:${zone.id}`,
-          settingName: "staffControl",
-          value: "false",
-          appliedBy: opts.appliedBy ?? "system",
-        },
-      });
-      await prisma.zone.update({
-        where: { id: zone.id },
-        data: { staffControlLocked: true },
-      });
-      result.zonesLocked.push(zone.id);
-    } catch (e) {
-      result.errors.push({
-        scope: `zone:${zone.id}`,
-        message: (e as Error).message,
-      });
-    }
-  }
+  // Per-zone staffControl was previously fired here. Removed because the
+  // BMAsia operator-scope SYB token returns Forbidden on
+  // soundZoneUpdateSettings — staffControl needs higher scope than we have.
+  // The Locked column on the dashboard still reflects live SYB state, so
+  // if staffControl gets set elsewhere (admin UI / different token) the
+  // column will show it after the next Sync now.
 
   if (result.errors.length === 0) {
     await prisma.account.update({

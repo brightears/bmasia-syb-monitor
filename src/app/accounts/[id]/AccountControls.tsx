@@ -132,7 +132,6 @@ export default function AccountControls(props: Props) {
     }
   }
 
-  const anyZoneMonitored = props.zones.some((z) => z.monitored);
   const anyBaselineCaptured = props.zones.some((z) => z.monitored && z.approvedPlayFromId);
 
   return (
@@ -168,11 +167,10 @@ export default function AccountControls(props: Props) {
           </label>
           <button
             onClick={applyPrevention}
-            disabled={busy !== null || !props.monitored || !anyZoneMonitored}
+            disabled={busy !== null || !props.monitored}
             className="rounded border border-[var(--border)] px-3 py-1 text-xs hover:bg-[var(--bg)] disabled:opacity-50"
-            title={!anyZoneMonitored ? "Mark at least one zone monitored first" : ""}
           >
-            {busy === "prevent" ? "Applying…" : props.preventionApplied ? "Re-apply prevention" : "Apply prevention"}
+            {busy === "prevent" ? "Applying…" : props.preventionApplied ? "Re-apply lockdown" : "Apply lockdown"}
           </button>
           <button
             onClick={syncNow}
@@ -183,10 +181,11 @@ export default function AccountControls(props: Props) {
           </button>
         </div>
         <p className="mt-3 text-xs text-[var(--fg-dim)]">
-          Prevention applies: <code>staffControl=false</code> on selected zones; account-level
-          {" "}<code>enableActivityLog=true</code>, <code>restrictEditMusic</code>,{" "}
-          <code>restrictDiscoverMusic</code>, <code>restrictBlockTracks</code>,{" "}
-          <code>restrictUnpairingFromPairedDevices</code>.
+          <b>Apply lockdown</b> turns on the account-wide protection layer in
+          SYB — staff can&apos;t edit playlists, discover new music, block tracks,
+          or unpair devices from the apps. Activity log is enabled so changes
+          are visible. Combined with auto-revert, this catches and reverses
+          any drift within 10 minutes.
         </p>
       </section>
 
@@ -205,7 +204,12 @@ export default function AccountControls(props: Props) {
                 <th className="border-b border-[var(--border)] py-2 pr-3">Monitored</th>
                 <th className="border-b border-[var(--border)] py-2 pr-3">Approved baseline</th>
                 <th className="border-b border-[var(--border)] py-2 pr-3">Last seen</th>
-                <th className="border-b border-[var(--border)] py-2 pr-3">Locked</th>
+                <th
+                  className="border-b border-[var(--border)] py-2 pr-3 text-[var(--fg-dim)]"
+                  title="Reflects per-zone staffControl from SYB. Read-only — this app does not set it (requires higher SYB scope). Shows yes only if set elsewhere."
+                >
+                  Locked <span className="opacity-60">ⓘ</span>
+                </th>
                 <th className="border-b border-[var(--border)] py-2 pr-3">Actions</th>
               </tr>
             </thead>
