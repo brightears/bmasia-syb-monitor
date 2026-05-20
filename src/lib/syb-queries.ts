@@ -342,44 +342,42 @@ export async function mutateAccountSettings(
 const ZONE_UPDATE_SETTINGS = `
   mutation SoundZoneUpdateSettings($input: SoundZoneUpdateSettingsInput!) {
     soundZoneUpdateSettings(input: $input) {
-      soundZone {
-        id
-        settings { staffControl }
-      }
+      soundZones { id settings { staffControl } }
+      settings { staffControl }
     }
   }
 `;
 
 export async function mutateZoneSettings(
-  zoneId: string,
+  zoneIdOrIds: string | string[],
   settings: { staffControl?: boolean }
 ): Promise<void> {
+  const soundZones = Array.isArray(zoneIdOrIds) ? zoneIdOrIds : [zoneIdOrIds];
   await graphql(ZONE_UPDATE_SETTINGS, {
-    input: { soundZone: zoneId, settings },
+    input: { soundZones, settings },
   });
 }
 
 const ZONE_ASSIGN_SOURCE = `
   mutation SoundZoneAssignSource($input: SoundZoneAssignSourceInput!) {
     soundZoneAssignSource(input: $input) {
-      soundZone {
-        id
-        playFrom { __typename ... on Playlist { id name } ... on Schedule { id name } }
-      }
+      soundZones { id }
+      source { __typename ... on Playlist { id name } ... on Schedule { id name } }
     }
   }
 `;
 
 export async function mutateAssignSource(
-  zoneId: string,
+  zoneIdOrIds: string | string[],
   sourceId: string
 ): Promise<{ id: string; name?: string; typeName?: string } | null> {
+  const soundZones = Array.isArray(zoneIdOrIds) ? zoneIdOrIds : [zoneIdOrIds];
   const data = await graphql<{
-    soundZoneAssignSource: { soundZone: { id: string; playFrom: any } };
+    soundZoneAssignSource: { soundZones: { id: string }[]; source: any };
   }>(ZONE_ASSIGN_SOURCE, {
-    input: { soundZone: zoneId, source: sourceId },
+    input: { soundZones, source: sourceId },
   });
-  const pf = data.soundZoneAssignSource?.soundZone?.playFrom;
-  if (!pf) return null;
-  return { id: pf.id, name: pf.name, typeName: pf.__typename };
+  const src = data.soundZoneAssignSource?.source;
+  if (!src) return null;
+  return { id: src.id, name: src.name, typeName: src.__typename };
 }

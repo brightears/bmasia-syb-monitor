@@ -37,6 +37,11 @@ export async function syncZoneInventory(accountId: string): Promise<SyncResult> 
     const pf = z.playFrom ?? null;
     const lastSeenName = pf?.name ?? null;
     const lastSeenId = pf?.id ?? null;
+    // Reflect live SYB staffControl in our Locked column. staffControl=false
+    // on the SYB side == zone is locked (staff can't touch it from the tablet).
+    const liveStaffControl = z.settings?.staffControl;
+    const liveLocked =
+      typeof liveStaffControl === "boolean" ? liveStaffControl === false : undefined;
     if (existingIds.has(z.id)) {
       await prisma.zone.update({
         where: { id: z.id },
@@ -44,6 +49,7 @@ export async function syncZoneInventory(accountId: string): Promise<SyncResult> 
           name: z.name,
           lastSeenPlayFromId: lastSeenId ?? undefined,
           lastSeenPlayFromName: lastSeenName ?? undefined,
+          ...(liveLocked !== undefined ? { staffControlLocked: liveLocked } : {}),
         },
       });
       result.updated.push(z.id);
@@ -55,6 +61,7 @@ export async function syncZoneInventory(accountId: string): Promise<SyncResult> 
           name: z.name,
           lastSeenPlayFromId: lastSeenId ?? undefined,
           lastSeenPlayFromName: lastSeenName ?? undefined,
+          staffControlLocked: liveLocked ?? false,
         },
       });
       result.added.push(z.id);
