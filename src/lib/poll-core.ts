@@ -34,12 +34,22 @@ function severityFor(action: string, actorType: string | undefined): string {
   return "info";
 }
 
-function describeRefSide(side: unknown): { id?: string; name?: string } {
+function describeRefSide(side: unknown): { id?: string; name?: string; kind?: string } {
   if (!side || typeof side !== "object") return {};
   const s = side as Record<string, unknown>;
+  const kind = typeof s.__typename === "string" ? s.__typename : undefined;
+  // SYB references nest the entity one level deep: PlaylistReference.playlist,
+  // ScheduleReference.schedule, etc. Pick whichever inner object exists.
+  const inner =
+    (s.playlist as Record<string, unknown> | undefined) ??
+    (s.schedule as Record<string, unknown> | undefined) ??
+    (s.track as Record<string, unknown> | undefined) ??
+    (s.device as Record<string, unknown> | undefined) ??
+    s;
   return {
-    id: typeof s.id === "string" ? s.id : undefined,
-    name: typeof s.name === "string" ? s.name : undefined,
+    id: typeof inner?.id === "string" ? inner.id : undefined,
+    name: typeof inner?.name === "string" ? inner.name : undefined,
+    kind,
   };
 }
 

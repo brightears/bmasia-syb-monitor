@@ -225,17 +225,17 @@ const ACTIVITY_LOG_QUERY = `
                 ... on ActivityLogReferenceDiff {
                   old {
                     __typename
-                    ... on PlaylistReference { id name }
-                    ... on ScheduleReference { id name }
-                    ... on DeviceReference { id name }
-                    ... on TrackReference { id name }
+                    ... on PlaylistReference { playlist { id name } }
+                    ... on ScheduleReference { schedule { id name } }
+                    ... on DeviceReference { device { id name } }
+                    ... on TrackReference { track { id name } }
                   }
                   new {
                     __typename
-                    ... on PlaylistReference { id name }
-                    ... on ScheduleReference { id name }
-                    ... on DeviceReference { id name }
-                    ... on TrackReference { id name }
+                    ... on PlaylistReference { playlist { id name } }
+                    ... on ScheduleReference { schedule { id name } }
+                    ... on DeviceReference { device { id name } }
+                    ... on TrackReference { track { id name } }
                   }
                 }
               }
