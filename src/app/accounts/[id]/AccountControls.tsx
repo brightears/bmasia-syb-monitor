@@ -204,12 +204,6 @@ export default function AccountControls(props: Props) {
                 <th className="border-b border-[var(--border)] py-2 pr-3">Monitored</th>
                 <th className="border-b border-[var(--border)] py-2 pr-3">Approved baseline</th>
                 <th className="border-b border-[var(--border)] py-2 pr-3">Last seen</th>
-                <th
-                  className="border-b border-[var(--border)] py-2 pr-3 text-[var(--fg-dim)]"
-                  title="Reflects per-zone staffControl from SYB. Read-only — this app does not set it (requires higher SYB scope). Shows yes only if set elsewhere."
-                >
-                  Locked <span className="opacity-60">ⓘ</span>
-                </th>
                 <th className="border-b border-[var(--border)] py-2 pr-3">Actions</th>
               </tr>
             </thead>
@@ -244,13 +238,6 @@ export default function AccountControls(props: Props) {
                       {z.lastSeenPlayFromName ?? "—"}
                       {drift && (
                         <div className="text-xs text-[var(--warn)]">drift!</div>
-                      )}
-                    </td>
-                    <td className="py-2 pr-3">
-                      {z.staffControlLocked ? (
-                        <span className="text-[var(--ok)]">yes</span>
-                      ) : (
-                        <span className="text-[var(--fg-dim)]">no</span>
                       )}
                     </td>
                     <td className="py-2 pr-3">
