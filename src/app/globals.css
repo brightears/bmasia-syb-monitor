@@ -6,8 +6,9 @@
   --fg: #e7ecf3;
   --fg-dim: #98a2b3;
   --border: #232936;
-  --accent: #4f8cff;
-  --warn: #f2b94a;
+  --accent: #f59e0b;
+  --accent-dim: #b06f08;
+  --warn: #f59e0b;
   --crit: #ef4444;
   --ok: #34d399;
 }

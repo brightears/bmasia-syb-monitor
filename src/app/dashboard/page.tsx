@@ -61,7 +61,6 @@ export default async function Dashboard() {
                   <Link href={`/accounts/${a.id}`} className="no-underline text-[var(--fg)] hover:underline">
                     {a.businessName}
                   </Link>
-                  <div className="text-xs text-[var(--fg-dim)]">{a.id}</div>
                 </td>
                 <td className="py-2 pr-4">
                   {a.monitored ? <span className="text-[var(--ok)]">on</span> : <span className="text-[var(--fg-dim)]">off</span>}

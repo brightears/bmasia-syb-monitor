@@ -24,8 +24,7 @@ export default async function AccountPage(props: { params: Promise<{ id: string 
       <div className="mb-2 text-sm text-[var(--fg-dim)]">
         <Link href="/dashboard" className="no-underline">← Dashboard</Link>
       </div>
-      <h1 className="mb-1 text-2xl font-semibold">{account.businessName}</h1>
-      <p className="mb-6 text-xs text-[var(--fg-dim)]">SYB id {account.id}</p>
+      <h1 className="mb-6 text-2xl font-semibold">{account.businessName}</h1>
 
       <AccountControls
         accountId={account.id}

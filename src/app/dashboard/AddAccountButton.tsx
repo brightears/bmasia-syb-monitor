@@ -96,7 +96,6 @@ export default function AddAccountButton() {
                   <li key={a.id} className="flex items-center justify-between py-2">
                     <div>
                       <div>{a.businessName}</div>
-                      <div className="text-xs text-[var(--fg-dim)]">{a.id}</div>
                     </div>
                     <button
                       onClick={() => onPick(a.id)}

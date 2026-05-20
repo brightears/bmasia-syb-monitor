@@ -217,7 +217,6 @@ export default function AccountControls(props: Props) {
                   <tr key={z.id} className="align-top">
                     <td className="py-2 pr-3">
                       <div>{z.name}</div>
-                      <div className="text-xs text-[var(--fg-dim)]">{z.id}</div>
                     </td>
                     <td className="py-2 pr-3">
                       <input
