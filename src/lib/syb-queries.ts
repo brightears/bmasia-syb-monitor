@@ -192,7 +192,7 @@ const ACTIVITY_LOG_QUERY = `
   query AccountActivityLog($id: ID!, $first: Int!, $after: String) {
     account(id: $id) {
       activityLog(first: $first, after: $after) {
-        totalCount
+        total
         edges {
           cursor
           node {
@@ -284,7 +284,7 @@ export async function fetchActivityLogPage(
     diff: normalizeDiff(e.node.diff),
   }));
   return {
-    total: log.totalCount,
+    total: log.total,
     endCursor: log.pageInfo?.endCursor ?? null,
     hasNextPage: !!log.pageInfo?.hasNextPage,
     entries,
