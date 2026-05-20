@@ -223,8 +223,20 @@ const ACTIVITY_LOG_QUERY = `
                 __typename
                 ... on ActivityLogJSONDiff { old new }
                 ... on ActivityLogReferenceDiff {
-                  old { __typename ... on Playlist { id name } ... on Schedule { id name } }
-                  new { __typename ... on Playlist { id name } ... on Schedule { id name } }
+                  old {
+                    __typename
+                    ... on PlaylistReference { id name }
+                    ... on ScheduleReference { id name }
+                    ... on DeviceReference { id name }
+                    ... on TrackReference { id name }
+                  }
+                  new {
+                    __typename
+                    ... on PlaylistReference { id name }
+                    ... on ScheduleReference { id name }
+                    ... on DeviceReference { id name }
+                    ... on TrackReference { id name }
+                  }
                 }
               }
             }
