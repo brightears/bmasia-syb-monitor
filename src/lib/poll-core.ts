@@ -4,7 +4,11 @@
  */
 
 import { prisma } from "./prisma";
-import { fetchActivityLogPage, type SybActivityLogEntry } from "./syb-queries";
+import {
+  fetchActivityLogPage,
+  fetchSoundZoneActivityLogPage,
+  type SybActivityLogEntry,
+} from "./syb-queries";
 import { revertToBaseline } from "./baseline";
 import { dispatchAlert } from "./notify";
 
@@ -66,10 +70,9 @@ function attemptResolveZoneId(
   entry: SybActivityLogEntry,
   knownZoneIds: Set<string>
 ): string | null {
-  // The diff for reference changes carries the new playlist; the zone itself
-  // is implicit on the activityLog scope. SYB's activity log on Account.activityLog
-  // returns Account-scoped events; zone-scoped events go through SoundZone.activityLog.
-  // Workaround: scan the raw payload for a zone id we know about.
+  // Used only by the account-level poll (which surfaces ACCOUNT_SETTING_CHANGED
+  // and similar) where the zone is not implicit. For zone-level entries we
+  // already know the zone.
   const payload = JSON.stringify(entry);
   for (const zid of knownZoneIds) {
     if (payload.includes(zid)) return zid;
@@ -97,168 +100,248 @@ export async function pollOneAccount(accountId: string): Promise<PollResult> {
     throw new Error(`Account ${accountId} is not monitored — skipping.`);
   }
 
-  const knownZoneIds = new Set(account.zones.map((z) => z.id));
-  const monitoredZoneById = new Map(
-    account.zones.filter((z) => z.monitored).map((z) => [z.id, z])
-  );
-
   const pageSize = parseInt(process.env.POLL_PAGE_SIZE ?? "50", 10);
-
-  // Pull a single page. If we land on cursor=null we'll only ever see latest
-  // page — which is fine for first run; subsequent runs use the saved cursor.
-  const page = await fetchActivityLogPage(accountId, {
-    first: pageSize,
-    after: account.lastCursor,
-  });
+  const monitoredZones = account.zones.filter((z) => z.monitored);
+  const knownZoneIds = new Set(account.zones.map((z) => z.id));
 
   const result: PollResult = {
     accountId,
-    fetched: page.entries.length,
+    fetched: 0,
     alertsCreated: 0,
     autoReverted: 0,
     notificationErrors: [],
     cursorAdvanced: false,
-    endCursor: page.endCursor ?? null,
+    endCursor: null,
   };
 
-  // SYB returns entries newest-first by default in activityLog.
-  // Process oldest-first to preserve causality.
-  const entries = [...page.entries].sort((a, b) =>
-    a.timestamp.localeCompare(b.timestamp)
-  );
-
-  for (const entry of entries) {
-    // Idempotency check
-    const dup = await prisma.alert.findUnique({ where: { syblogId: entry.id } });
-    if (dup) continue;
-
-    if (!ALERTWORTHY.has(entry.action)) continue;
-    if (isInternalApiActor(entry)) continue;
-
-    const zoneId = attemptResolveZoneId(entry, knownZoneIds);
-    const monitoredZone = zoneId ? monitoredZoneById.get(zoneId) : null;
-
-    // For PLAY_FROM_CHANGED we only alert on monitored zones — drift on
-    // unmonitored zones is noise.
-    if (entry.action === "PLAY_FROM_CHANGED" && !monitoredZone) continue;
-
-    const diff = diffPair(entry);
-    const actorType = entry.actor?.__typename ?? "Unknown";
-    const actorName =
-      entry.actor?.device?.name ??
-      entry.actor?.user?.name ??
-      entry.actor?.name ??
-      null;
-    const actorEmail = entry.actor?.user?.email ?? null;
-
-    const alert = await prisma.alert.create({
-      data: {
-        syblogId: entry.id,
-        accountId: account.id,
-        zoneId: zoneId ?? null,
-        action: entry.action,
-        description: entry.description ?? null,
-        actorType,
-        actorName,
-        actorEmail,
-        actorRaw: (entry.actor as object | undefined) ?? undefined,
-        diffOld: (diff.old as object | null) ?? undefined,
-        diffNew: (diff.new as object | null) ?? undefined,
-        timestamp: new Date(entry.timestamp),
-        severity: severityFor(entry.action, actorType),
-      },
-    });
-    result.alertsCreated += 1;
-
-    // Compare drift vs approved baseline; auto-revert if enabled.
-    let resolution: string | null = null;
-    if (
-      entry.action === "PLAY_FROM_CHANGED" &&
-      account.autoRevertEnabled &&
-      monitoredZone?.approvedPlayFromId
-    ) {
-      const newRef = diff.new as { id?: string } | null;
-      if (newRef?.id && newRef.id !== monitoredZone.approvedPlayFromId) {
-        try {
-          await revertToBaseline(monitoredZone.id);
-          resolution = "auto-reverted";
-          result.autoReverted += 1;
-        } catch (e) {
-          result.notificationErrors.push(
-            `auto-revert ${monitoredZone.id}: ${(e as Error).message}`
-          );
-        }
-      } else if (newRef?.id === monitoredZone.approvedPlayFromId) {
-        resolution = "ignored:matches-baseline";
-      }
-    }
-
-    if (resolution) {
-      await prisma.alert.update({
-        where: { id: alert.id },
-        data: {
-          resolution,
-          resolvedAt: new Date(),
-          resolvedBy: "cron",
-        },
+  // Process the per-zone activityLog for every monitored zone. Account-level
+  // activityLog is polled separately at the end for ACCOUNT_SETTING_CHANGED.
+  for (const zone of monitoredZones) {
+    let zonePage;
+    try {
+      zonePage = await fetchSoundZoneActivityLogPage(zone.id, {
+        first: pageSize,
+        after: zone.lastCursor,
       });
+    } catch (e) {
+      result.notificationErrors.push(
+        `fetch ${zone.id}: ${(e as Error).message}`
+      );
+      continue;
     }
 
-    // Chat notification policy ("Mode B"):
-    //   - Skip when auto-revert handled it cleanly (resolution=auto-reverted)
-    //     — the audit row still exists at /alerts but no Chat ping
-    //   - Skip when the new source already matched baseline (no-op drift)
-    //   - Always Chat for non-drift events (ACCOUNT_SETTING_CHANGED,
-    //     DEVICE_UNPAIRED, TRACK_BLOCKED, etc.) and drift that wasn't
-    //     auto-reverted (either autoRevert OFF, or revert failed)
-    const skipChat =
-      resolution === "auto-reverted" || resolution === "ignored:matches-baseline";
+    result.fetched += zonePage.entries.length;
 
-    if (!skipChat) {
-      const fresh = await prisma.alert.findUniqueOrThrow({ where: { id: alert.id } });
-      const dispatch = await dispatchAlert({
-        account: {
-          id: account.id,
-          businessName: account.businessName,
-          chatSpaceId: account.chatSpaceId,
-          telegramChatId: account.telegramChatId,
-        },
-        zone: monitoredZone
-          ? {
-              id: monitoredZone.id,
-              name: monitoredZone.name,
-              approvedPlayFromName: monitoredZone.approvedPlayFromName,
-            }
-          : null,
-        alert: fresh,
-        appBaseUrl: process.env.NEXT_PUBLIC_APP_URL,
-      });
-      if (dispatch.errors.length) result.notificationErrors.push(...dispatch.errors);
+    // SYB returns entries newest-first; process oldest-first to preserve causality.
+    const entries = [...zonePage.entries].sort((a, b) =>
+      a.timestamp.localeCompare(b.timestamp)
+    );
+
+    for (const entry of entries) {
+      const handled = await processEntry(
+        entry,
+        account,
+        zone.id,
+        new Map([[zone.id, zone]])
+      );
+      if (handled.alertCreated) result.alertsCreated += 1;
+      if (handled.autoReverted) result.autoReverted += 1;
+      if (handled.error) result.notificationErrors.push(handled.error);
     }
 
-    if (zoneId && entry.action === "PLAY_FROM_CHANGED") {
+    if (zonePage.endCursor) {
       await prisma.zone.update({
-        where: { id: zoneId },
-        data: {
-          driftDetectedAt: new Date(entry.timestamp),
-          lastSeenPlayFromId: (diff.new as { id?: string } | null)?.id ?? null,
-          lastSeenPlayFromName:
-            (diff.new as { name?: string } | null)?.name ?? null,
-        },
+        where: { id: zone.id },
+        data: { lastCursor: zonePage.endCursor, lastPolledAt: new Date() },
+      });
+      result.cursorAdvanced = true;
+    } else {
+      await prisma.zone.update({
+        where: { id: zone.id },
+        data: { lastPolledAt: new Date() },
       });
     }
   }
 
-  if (page.endCursor) {
+  // Also poll the account-level activityLog for account-scoped events
+  // (ACCOUNT_SETTING_CHANGED — e.g., someone disabling enableActivityLog).
+  // PLAY_FROM_CHANGED is filtered out below since the per-zone loop handles it.
+  const acctPage = await fetchActivityLogPage(accountId, {
+    first: pageSize,
+    after: account.lastCursor,
+  });
+
+  result.fetched += acctPage.entries.length;
+  const acctEntries = [...acctPage.entries].sort((a, b) =>
+    a.timestamp.localeCompare(b.timestamp)
+  );
+
+  const monitoredZoneById = new Map(monitoredZones.map((z) => [z.id, z]));
+
+  for (const entry of acctEntries) {
+    // Skip drift events — the per-zone loop above handles them with full fidelity.
+    if (entry.action === "PLAY_FROM_CHANGED") continue;
+
+    const zoneId = attemptResolveZoneId(entry, knownZoneIds);
+    const handled = await processEntry(entry, account, zoneId, monitoredZoneById);
+    if (handled.alertCreated) result.alertsCreated += 1;
+    if (handled.autoReverted) result.autoReverted += 1;
+    if (handled.error) result.notificationErrors.push(handled.error);
+  }
+
+  if (acctPage.endCursor) {
     await prisma.account.update({
       where: { id: accountId },
-      data: { lastCursor: page.endCursor, lastPolledAt: new Date() },
+      data: { lastCursor: acctPage.endCursor, lastPolledAt: new Date() },
     });
     result.cursorAdvanced = true;
+    result.endCursor = acctPage.endCursor;
   } else {
     await prisma.account.update({
       where: { id: accountId },
       data: { lastPolledAt: new Date() },
+    });
+  }
+
+  return result;
+}
+
+interface ProcessEntryResult {
+  alertCreated: boolean;
+  autoReverted: boolean;
+  error: string | null;
+}
+
+async function processEntry(
+  entry: SybActivityLogEntry,
+  account: {
+    id: string;
+    businessName: string;
+    autoRevertEnabled: boolean;
+    chatSpaceId: string | null;
+    telegramChatId: string | null;
+  },
+  zoneId: string | null,
+  monitoredZoneById: Map<
+    string,
+    {
+      id: string;
+      name: string;
+      approvedPlayFromId: string | null;
+      approvedPlayFromName: string | null;
+    }
+  >
+): Promise<ProcessEntryResult> {
+  const result: ProcessEntryResult = {
+    alertCreated: false,
+    autoReverted: false,
+    error: null,
+  };
+
+  // Idempotency
+  const dup = await prisma.alert.findUnique({ where: { syblogId: entry.id } });
+  if (dup) return result;
+  if (!ALERTWORTHY.has(entry.action)) return result;
+  if (isInternalApiActor(entry)) return result;
+
+  const monitoredZone = zoneId ? monitoredZoneById.get(zoneId) ?? null : null;
+
+  // Only alert on PLAY_FROM_CHANGED for monitored zones.
+  if (entry.action === "PLAY_FROM_CHANGED" && !monitoredZone) return result;
+
+  const diff = diffPair(entry);
+  const actorType = entry.actor?.__typename ?? "Unknown";
+  const actorName =
+    entry.actor?.device?.name ??
+    entry.actor?.user?.name ??
+    entry.actor?.name ??
+    null;
+  const actorEmail = entry.actor?.user?.email ?? null;
+
+  const alert = await prisma.alert.create({
+    data: {
+      syblogId: entry.id,
+      accountId: account.id,
+      zoneId: zoneId ?? null,
+      action: entry.action,
+      description: entry.description ?? null,
+      actorType,
+      actorName,
+      actorEmail,
+      actorRaw: (entry.actor as object | undefined) ?? undefined,
+      diffOld: (diff.old as object | null) ?? undefined,
+      diffNew: (diff.new as object | null) ?? undefined,
+      timestamp: new Date(entry.timestamp),
+      severity: severityFor(entry.action, actorType),
+    },
+  });
+  result.alertCreated = true;
+
+  let resolution: string | null = null;
+  if (
+    entry.action === "PLAY_FROM_CHANGED" &&
+    account.autoRevertEnabled &&
+    monitoredZone?.approvedPlayFromId
+  ) {
+    const newRef = diff.new as { id?: string } | null;
+    if (newRef?.id && newRef.id !== monitoredZone.approvedPlayFromId) {
+      try {
+        await revertToBaseline(monitoredZone.id);
+        resolution = "auto-reverted";
+        result.autoReverted = true;
+      } catch (e) {
+        result.error = `auto-revert ${monitoredZone.id}: ${(e as Error).message}`;
+      }
+    } else if (newRef?.id === monitoredZone.approvedPlayFromId) {
+      resolution = "ignored:matches-baseline";
+    }
+  }
+
+  if (resolution) {
+    await prisma.alert.update({
+      where: { id: alert.id },
+      data: { resolution, resolvedAt: new Date(), resolvedBy: "cron" },
+    });
+  }
+
+  const skipChat =
+    resolution === "auto-reverted" || resolution === "ignored:matches-baseline";
+
+  if (!skipChat) {
+    const fresh = await prisma.alert.findUniqueOrThrow({
+      where: { id: alert.id },
+    });
+    const dispatch = await dispatchAlert({
+      account: {
+        id: account.id,
+        businessName: account.businessName,
+        chatSpaceId: account.chatSpaceId,
+        telegramChatId: account.telegramChatId,
+      },
+      zone: monitoredZone
+        ? {
+            id: monitoredZone.id,
+            name: monitoredZone.name,
+            approvedPlayFromName: monitoredZone.approvedPlayFromName,
+          }
+        : null,
+      alert: fresh,
+      appBaseUrl: process.env.NEXT_PUBLIC_APP_URL,
+    });
+    if (dispatch.errors.length) {
+      result.error = (result.error ? result.error + "; " : "") + dispatch.errors.join("; ");
+    }
+  }
+
+  if (zoneId && entry.action === "PLAY_FROM_CHANGED") {
+    await prisma.zone.update({
+      where: { id: zoneId },
+      data: {
+        driftDetectedAt: new Date(entry.timestamp),
+        lastSeenPlayFromId: (diff.new as { id?: string } | null)?.id ?? null,
+        lastSeenPlayFromName:
+          (diff.new as { name?: string } | null)?.name ?? null,
+      },
     });
   }
 

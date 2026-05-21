@@ -303,6 +303,101 @@ export async function fetchActivityLogPage(
   };
 }
 
+// PLAY_FROM_CHANGED + most zone-touching events live on SoundZone.activityLog,
+// not Account.activityLog. Account.activityLog only surfaces account-scoped
+// events (ACCOUNT_SETTING_CHANGED, user-mgmt). For drift detection we poll
+// per-monitored-zone.
+const SOUND_ZONE_ACTIVITY_LOG_QUERY = `
+  query SoundZoneActivityLog($id: ID!, $first: Int!, $after: String) {
+    soundZone(id: $id) {
+      activityLog(first: $first, after: $after) {
+        total
+        edges {
+          cursor
+          node {
+            id
+            timestamp
+            action
+            description
+            actor {
+              entity {
+                __typename
+                ... on DeviceActor {
+                  device { id name type platform osVersion }
+                }
+                ... on UserActor {
+                  user { id name email }
+                }
+                ... on ActivityLogUserActor {
+                  user { id name email }
+                }
+                ... on InternalActor {
+                  name
+                }
+              }
+            }
+            diff {
+              type
+              diffEntity {
+                __typename
+                ... on ActivityLogJSONDiff { old new }
+                ... on ActivityLogReferenceDiff {
+                  old {
+                    __typename
+                    ... on PlaylistReference { playlist { id name } }
+                    ... on ScheduleReference { schedule { id name } }
+                    ... on DeviceReference { device { id name } }
+                    ... on TrackReference { track { id name } }
+                  }
+                  new {
+                    __typename
+                    ... on PlaylistReference { playlist { id name } }
+                    ... on ScheduleReference { schedule { id name } }
+                    ... on DeviceReference { device { id name } }
+                    ... on TrackReference { track { id name } }
+                  }
+                }
+              }
+            }
+          }
+        }
+        pageInfo { hasNextPage endCursor }
+      }
+    }
+  }
+`;
+
+export async function fetchSoundZoneActivityLogPage(
+  soundZoneId: string,
+  opts: { first?: number; after?: string | null } = {}
+): Promise<SybActivityLogPage> {
+  const first = opts.first ?? 50;
+  const after = opts.after ?? null;
+  const data = await graphql<{ soundZone: any }>(SOUND_ZONE_ACTIVITY_LOG_QUERY, {
+    id: soundZoneId,
+    first,
+    after,
+  });
+  const log = data.soundZone?.activityLog;
+  if (!log) {
+    return { total: 0, endCursor: null, hasNextPage: false, entries: [] };
+  }
+  const entries: SybActivityLogEntry[] = (log.edges ?? []).map((e: any) => ({
+    id: e.node.id,
+    timestamp: e.node.timestamp,
+    action: e.node.action,
+    description: e.node.description ?? null,
+    actor: normalizeActor(e.node.actor),
+    diff: normalizeDiff(e.node.diff),
+  }));
+  return {
+    total: log.total,
+    endCursor: log.pageInfo?.endCursor ?? null,
+    hasNextPage: !!log.pageInfo?.hasNextPage,
+    entries,
+  };
+}
+
 // ───────────────────────────── Mutations (gated by caller) ─────────────────────────────
 
 const ACCOUNT_UPDATE_SETTINGS = `

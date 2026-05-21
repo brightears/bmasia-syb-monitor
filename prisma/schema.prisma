@@ -63,6 +63,11 @@ model Zone {
   // Prevention settings status
   staffControlLocked   Boolean @default(false)
 
+  // Zone-level polling state (PLAY_FROM_CHANGED lives on SoundZone.activityLog,
+  // not Account.activityLog, so the cursor needs to live per-zone).
+  lastCursor   String?
+  lastPolledAt DateTime?
+
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
 
