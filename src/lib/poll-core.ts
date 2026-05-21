@@ -117,10 +117,17 @@ export async function pollOneAccount(accountId: string): Promise<PollResult> {
   // Process the per-zone activityLog for every monitored zone. Account-level
   // activityLog is polled separately at the end for ACCOUNT_SETTING_CHANGED.
   for (const zone of monitoredZones) {
+    // First-run cursor anchor: when lastCursor is null this is the first
+    // poll for the zone (fresh enrollment OR fresh deploy). Fetch a single
+    // entry just to set the cursor; do NOT alert on history. The next tick
+    // sees only entries that arrived after this anchor — no backlog flood.
+    const isFirstRun = zone.lastCursor === null;
+    const fetchSize = isFirstRun ? 1 : pageSize;
+
     let zonePage;
     try {
       zonePage = await fetchSoundZoneActivityLogPage(zone.id, {
-        first: pageSize,
+        first: fetchSize,
         after: zone.lastCursor,
       });
     } catch (e) {
@@ -131,6 +138,19 @@ export async function pollOneAccount(accountId: string): Promise<PollResult> {
     }
 
     result.fetched += zonePage.entries.length;
+
+    if (isFirstRun) {
+      // Anchor the cursor; skip alert creation entirely.
+      await prisma.zone.update({
+        where: { id: zone.id },
+        data: {
+          lastCursor: zonePage.endCursor ?? null,
+          lastPolledAt: new Date(),
+        },
+      });
+      if (zonePage.endCursor) result.cursorAdvanced = true;
+      continue;
+    }
 
     // SYB returns entries newest-first; process oldest-first to preserve causality.
     const entries = [...zonePage.entries].sort((a, b) =>
@@ -166,12 +186,31 @@ export async function pollOneAccount(accountId: string): Promise<PollResult> {
   // Also poll the account-level activityLog for account-scoped events
   // (ACCOUNT_SETTING_CHANGED — e.g., someone disabling enableActivityLog).
   // PLAY_FROM_CHANGED is filtered out below since the per-zone loop handles it.
+  const acctIsFirstRun = account.lastCursor === null;
+  const acctFetchSize = acctIsFirstRun ? 1 : pageSize;
   const acctPage = await fetchActivityLogPage(accountId, {
-    first: pageSize,
+    first: acctFetchSize,
     after: account.lastCursor,
   });
 
   result.fetched += acctPage.entries.length;
+
+  if (acctIsFirstRun) {
+    // Anchor only — do not alert on historical account-level events.
+    await prisma.account.update({
+      where: { id: accountId },
+      data: {
+        lastCursor: acctPage.endCursor ?? null,
+        lastPolledAt: new Date(),
+      },
+    });
+    if (acctPage.endCursor) {
+      result.cursorAdvanced = true;
+      result.endCursor = acctPage.endCursor;
+    }
+    return result;
+  }
+
   const acctEntries = [...acctPage.entries].sort((a, b) =>
     a.timestamp.localeCompare(b.timestamp)
   );
