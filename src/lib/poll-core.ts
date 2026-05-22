@@ -116,11 +116,16 @@ export async function pollOneAccount(accountId: string): Promise<PollResult> {
 
   // Process the per-zone activityLog for every monitored zone. Account-level
   // activityLog is polled separately at the end for ACCOUNT_SETTING_CHANGED.
+  //
+  // Strategy: ALWAYS fetch the newest N entries with NO `after` cursor.
+  // The previous cursor-based pagination paged BACKWARD into history (SYB's
+  // newest-first connection means `after: cursor` returns OLDER items, not
+  // newer ones), so after the first-run anchor every subsequent poll fetched
+  // 0 entries and missed all real drift. Dedup is done via `Alert.syblogId`
+  // unique index — already enforced by processEntry's `findUnique` short-
+  // circuit. `lastCursor` is repurposed as a first-run marker only (non-null
+  // == "we've done the anchor, start alerting").
   for (const zone of monitoredZones) {
-    // First-run cursor anchor: when lastCursor is null this is the first
-    // poll for the zone (fresh enrollment OR fresh deploy). Fetch a single
-    // entry just to set the cursor; do NOT alert on history. The next tick
-    // sees only entries that arrived after this anchor — no backlog flood.
     const isFirstRun = zone.lastCursor === null;
     const fetchSize = isFirstRun ? 1 : pageSize;
 
@@ -128,7 +133,7 @@ export async function pollOneAccount(accountId: string): Promise<PollResult> {
     try {
       zonePage = await fetchSoundZoneActivityLogPage(zone.id, {
         first: fetchSize,
-        after: zone.lastCursor,
+        after: null,
       });
     } catch (e) {
       result.notificationErrors.push(
@@ -140,11 +145,12 @@ export async function pollOneAccount(accountId: string): Promise<PollResult> {
     result.fetched += zonePage.entries.length;
 
     if (isFirstRun) {
-      // Anchor the cursor; skip alert creation entirely.
+      // Anchor: any non-null value flips us out of first-run state on the
+      // next tick. We keep storing endCursor for forensic visibility.
       await prisma.zone.update({
         where: { id: zone.id },
         data: {
-          lastCursor: zonePage.endCursor ?? null,
+          lastCursor: zonePage.endCursor ?? "anchored",
           lastPolledAt: new Date(),
         },
       });
@@ -153,6 +159,8 @@ export async function pollOneAccount(accountId: string): Promise<PollResult> {
     }
 
     // SYB returns entries newest-first; process oldest-first to preserve causality.
+    // processEntry idempotency (Alert.syblogId unique) makes re-fetching
+    // already-seen entries every tick safe.
     const entries = [...zonePage.entries].sort((a, b) =>
       a.timestamp.localeCompare(b.timestamp)
     );
@@ -169,38 +177,31 @@ export async function pollOneAccount(accountId: string): Promise<PollResult> {
       if (handled.error) result.notificationErrors.push(handled.error);
     }
 
-    if (zonePage.endCursor) {
-      await prisma.zone.update({
-        where: { id: zone.id },
-        data: { lastCursor: zonePage.endCursor, lastPolledAt: new Date() },
-      });
-      result.cursorAdvanced = true;
-    } else {
-      await prisma.zone.update({
-        where: { id: zone.id },
-        data: { lastPolledAt: new Date() },
-      });
-    }
+    await prisma.zone.update({
+      where: { id: zone.id },
+      data: { lastPolledAt: new Date() },
+    });
   }
 
   // Also poll the account-level activityLog for account-scoped events
   // (ACCOUNT_SETTING_CHANGED — e.g., someone disabling enableActivityLog).
   // PLAY_FROM_CHANGED is filtered out below since the per-zone loop handles it.
+  // Same fix as per-zone: fetch newest N with no cursor, dedup via Alert.syblogId.
   const acctIsFirstRun = account.lastCursor === null;
   const acctFetchSize = acctIsFirstRun ? 1 : pageSize;
   const acctPage = await fetchActivityLogPage(accountId, {
     first: acctFetchSize,
-    after: account.lastCursor,
+    after: null,
   });
 
   result.fetched += acctPage.entries.length;
 
   if (acctIsFirstRun) {
-    // Anchor only — do not alert on historical account-level events.
+    // Anchor: any non-null value flips us out of first-run on the next tick.
     await prisma.account.update({
       where: { id: accountId },
       data: {
-        lastCursor: acctPage.endCursor ?? null,
+        lastCursor: acctPage.endCursor ?? "anchored",
         lastPolledAt: new Date(),
       },
     });
@@ -228,19 +229,10 @@ export async function pollOneAccount(accountId: string): Promise<PollResult> {
     if (handled.error) result.notificationErrors.push(handled.error);
   }
 
-  if (acctPage.endCursor) {
-    await prisma.account.update({
-      where: { id: accountId },
-      data: { lastCursor: acctPage.endCursor, lastPolledAt: new Date() },
-    });
-    result.cursorAdvanced = true;
-    result.endCursor = acctPage.endCursor;
-  } else {
-    await prisma.account.update({
-      where: { id: accountId },
-      data: { lastPolledAt: new Date() },
-    });
-  }
+  await prisma.account.update({
+    where: { id: accountId },
+    data: { lastPolledAt: new Date() },
+  });
 
   return result;
 }
