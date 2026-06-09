@@ -28,6 +28,7 @@ export default async function AccountPage(props: { params: Promise<{ id: string 
 
       <AccountControls
         accountId={account.id}
+        businessName={account.businessName}
         monitored={account.monitored}
         autoRevertEnabled={account.autoRevertEnabled}
         preventionApplied={account.preventionApplied}

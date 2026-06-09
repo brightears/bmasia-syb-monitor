@@ -17,6 +17,7 @@ interface ZoneView {
 
 interface Props {
   accountId: string;
+  businessName: string;
   monitored: boolean;
   autoRevertEnabled: boolean;
   preventionApplied: boolean;
@@ -27,6 +28,7 @@ export default function AccountControls(props: Props) {
   const router = useRouter();
   const [busy, setBusy] = useState<string | null>(null);
   const [err, setErr] = useState<string | null>(null);
+  const [confirmDelete, setConfirmDelete] = useState(false);
   const [, startTransition] = useTransition();
 
   async function patchAccount(payload: Record<string, unknown>, busyLabel: string) {
@@ -128,6 +130,26 @@ export default function AccountControls(props: Props) {
     } catch (e) {
       setErr((e as Error).message);
     } finally {
+      setBusy(null);
+    }
+  }
+
+  async function deleteAccount() {
+    setBusy("delete");
+    setErr(null);
+    try {
+      const res = await fetch(`/api/accounts/${props.accountId}`, {
+        method: "DELETE",
+      });
+      if (!res.ok) {
+        const body = await res.json().catch(() => ({}));
+        throw new Error(body.error || `Failed (${res.status})`);
+      }
+      // Account is gone — leave the page. (No busy reset: this view unmounts.)
+      router.push("/dashboard");
+      router.refresh();
+    } catch (e) {
+      setErr((e as Error).message);
       setBusy(null);
     }
   }
@@ -265,6 +287,46 @@ export default function AccountControls(props: Props) {
               })}
             </tbody>
           </table>
+        )}
+      </section>
+
+      {/* Danger zone — remove from monitor */}
+      <section className="rounded border border-[var(--crit)]/40 bg-[var(--bg-elev)] p-4">
+        <h2 className="mb-1 text-sm font-medium text-[var(--crit)]">Danger zone</h2>
+        <p className="mb-3 text-xs text-[var(--fg-dim)]">
+          Removes this account, its zones, and its alert history from the
+          monitor. This does <b>not</b> change anything in Soundtrack Your
+          Brand — any lockdown already applied stays in place; we just stop
+          tracking it here. You can re-add the account later from the dashboard.
+        </p>
+        {!confirmDelete ? (
+          <button
+            onClick={() => setConfirmDelete(true)}
+            disabled={busy !== null}
+            className="rounded border border-[var(--crit)] px-3 py-1 text-xs text-[var(--crit)] hover:bg-[var(--bg)] disabled:opacity-50"
+          >
+            Remove account
+          </button>
+        ) : (
+          <div className="flex flex-wrap items-center gap-3">
+            <span className="text-xs">
+              Remove <b>{props.businessName}</b> and its alerts? This can&apos;t be undone.
+            </span>
+            <button
+              onClick={deleteAccount}
+              disabled={busy !== null}
+              className="rounded border border-[var(--crit)] bg-[var(--crit)]/10 px-3 py-1 text-xs text-[var(--crit)] hover:bg-[var(--crit)]/20 disabled:opacity-50"
+            >
+              {busy === "delete" ? "Removing…" : "Confirm remove"}
+            </button>
+            <button
+              onClick={() => setConfirmDelete(false)}
+              disabled={busy !== null}
+              className="rounded border border-[var(--border)] px-3 py-1 text-xs hover:bg-[var(--bg)] disabled:opacity-50"
+            >
+              Cancel
+            </button>
+          </div>
         )}
       </section>
     </div>

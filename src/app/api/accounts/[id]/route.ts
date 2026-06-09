@@ -76,3 +76,39 @@ export async function GET(
   if (!account) return NextResponse.json({ error: "Not found" }, { status: 404 });
   return NextResponse.json(account);
 }
+
+/**
+ * Remove an account from the monitor. Cascades to its zones, alerts, and
+ * applied-setting records (see schema.prisma `onDelete: Cascade`).
+ *
+ * This is a LOCAL delete only — it intentionally fires no SYB mutation. The
+ * account keeps whatever prevention/lockdown it already has in Soundtrack;
+ * we simply stop tracking it here. Re-add it any time from the dashboard.
+ */
+export async function DELETE(
+  req: NextRequest,
+  ctx: { params: Promise<{ id: string }> }
+) {
+  try {
+    await requireSessionOrToken(req);
+  } catch (e) {
+    if (e instanceof UnauthorizedError) {
+      return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
+    }
+    throw e;
+  }
+
+  const { id } = await ctx.params;
+
+  try {
+    await prisma.account.delete({ where: { id } });
+  } catch (e) {
+    // P2025 = record to delete was not found.
+    if ((e as { code?: string }).code === "P2025") {
+      return NextResponse.json({ error: "Not found" }, { status: 404 });
+    }
+    throw e;
+  }
+
+  return NextResponse.json({ ok: true });
+}
