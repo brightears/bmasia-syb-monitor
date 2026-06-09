@@ -4,6 +4,7 @@ import { getSession } from "@/lib/auth";
 import { prisma } from "@/lib/prisma";
 import { relativeTime } from "@/lib/utils";
 import AddAccountButton from "./AddAccountButton";
+import DeleteAccountButton from "./DeleteAccountButton";
 
 export default async function Dashboard() {
   const session = await getSession();
@@ -52,6 +53,7 @@ export default async function Dashboard() {
               <th className="border-b border-[var(--border)] py-2 pr-4">Zones</th>
               <th className="border-b border-[var(--border)] py-2 pr-4">Open alerts</th>
               <th className="border-b border-[var(--border)] py-2 pr-4">Last poll</th>
+              <th className="border-b border-[var(--border)] py-2"></th>
             </tr>
           </thead>
           <tbody>
@@ -82,6 +84,9 @@ export default async function Dashboard() {
                   )}
                 </td>
                 <td className="py-2 pr-4 text-[var(--fg-dim)]">{relativeTime(a.lastPolledAt)}</td>
+                <td className="py-2 text-right">
+                  <DeleteAccountButton accountId={a.id} businessName={a.businessName} />
+                </td>
               </tr>
             ))}
           </tbody>
