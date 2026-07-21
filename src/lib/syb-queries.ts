@@ -82,25 +82,75 @@ interface AccountsPageResp {
   } | null;
 }
 
-export async function listAccounts(limit = 200): Promise<SybAccount[]> {
+/**
+ * Fetch ALL accounts visible to the operator token, walking the cursor to the
+ * end of the connection, then return them sorted by name.
+ *
+ * This used to take a fixed `limit` (default 200; the API route passed 500) and
+ * stop once that many rows were collected. BMAsia has more accounts than the
+ * cap, so the "Add account" picker silently ended mid-alphabet — anything past
+ * the cutoff (e.g. "Park Hyatt Maldives Hadahaa") was never fetched, and the
+ * client-side filter couldn't match what was never loaded. We now page to the
+ * end.
+ *
+ * `maxPages` is a hard iteration ceiling so a misbehaving connection (a cursor
+ * that advances but yields no new rows, or `hasNextPage` stuck true) can't spin
+ * the request loop forever. At pageSize 50, the default covers 10k accounts. If
+ * we ever stop while SYB still reports more, we warn so the truncation is
+ * greppable in the logs rather than silent.
+ */
+export async function listAccounts(maxPages = 200): Promise<SybAccount[]> {
   const out: SybAccount[] = [];
+  const seen = new Set<string>();
   let cursor: string | null = null;
+  let truncated = false;
   const pageSize = 50;
 
-  for (let i = 0; i < Math.ceil(limit / pageSize); i++) {
+  for (let page = 0; page < maxPages; page++) {
     const data: AccountsPageResp = await graphql<AccountsPageResp>(
       ACCOUNTS_PAGE_QUERY,
       { first: pageSize, after: cursor }
     );
     const conn = data.me?.accounts;
     if (!conn) break;
-    for (const edge of conn.edges) out.push(edge.node);
-    if (!conn.pageInfo.hasNextPage) break;
-    cursor = conn.pageInfo.endCursor;
-    if (out.length >= limit) break;
+
+    let added = 0;
+    for (const edge of conn.edges) {
+      if (seen.has(edge.node.id)) continue; // defensive de-dup
+      seen.add(edge.node.id);
+      out.push(edge.node);
+      added++;
+    }
+
+    if (!conn.pageInfo.hasNextPage) break; // reached the end — the normal exit
+
+    // Non-terminating signatures: no/duplicate cursor, or a page that claims
+    // "more" but added nothing new. Bail instead of looping forever.
+    const next = conn.pageInfo.endCursor;
+    if (!next || next === cursor || added === 0) {
+      truncated = true;
+      break;
+    }
+    cursor = next;
+
+    if (page === maxPages - 1) truncated = true; // hit the ceiling with more to go
   }
 
-  return out.slice(0, limit);
+  if (truncated) {
+    console.warn(
+      `[listAccounts] returned ${out.length} accounts but SYB still reports more — ` +
+        `list may be truncated (cursor stalled or maxPages=${maxPages} hit). Investigate / raise maxPages.`
+    );
+  }
+
+  // Case-/accent-insensitive so "MELIÁ" sorts with "Melia" and the picker reads
+  // as a clean A→Z list instead of SYB's raw ordering.
+  return out.sort((a, b) =>
+    a.businessName.localeCompare(b.businessName, undefined, {
+      sensitivity: "base",
+      numeric: true,
+    })
+  );
 }
 
 const ACCOUNT_WITH_ZONES_QUERY = `

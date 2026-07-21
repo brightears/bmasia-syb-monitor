@@ -53,8 +53,12 @@ export default function AddAccountButton() {
     }
   }
 
+  // Strip diacritics + lowercase on both sides so the filter matches the
+  // accent-insensitive server sort — typing "melia bali" finds "MELIÁ BALI".
+  const norm = (s: string) =>
+    s.normalize("NFD").replace(/\p{Diacritic}/gu, "").toLowerCase();
   const filtered = (accounts ?? []).filter((a) =>
-    a.businessName.toLowerCase().includes(filter.toLowerCase())
+    norm(a.businessName).includes(norm(filter))
   );
 
   return (

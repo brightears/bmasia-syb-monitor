@@ -12,7 +12,7 @@ export async function GET(_req: NextRequest) {
     throw e;
   }
   try {
-    const accounts = await listAccounts(500);
+    const accounts = await listAccounts();
     return NextResponse.json({ accounts });
   } catch (e) {
     return NextResponse.json({ error: (e as Error).message }, { status: 502 });
