@@ -309,6 +309,9 @@ async function processEntry(
   result.alertCreated = true;
 
   let resolution: string | null = null;
+  // Whether this alert is genuinely handled (drift undone / already on baseline).
+  // A FAILED auto-revert is not — it stays open and still notifies the team.
+  let resolvedNow = false;
   if (
     entry.action === "PLAY_FROM_CHANGED" &&
     account.autoRevertEnabled &&
@@ -317,26 +320,42 @@ async function processEntry(
     const newRef = diff.new as { id?: string } | null;
     if (newRef?.id && newRef.id !== monitoredZone.approvedPlayFromId) {
       try {
-        await revertToBaseline(monitoredZone.id);
-        resolution = "auto-reverted";
-        result.autoReverted = true;
+        const rev = await revertToBaseline(monitoredZone.id);
+        if (rev.reverted) {
+          resolution = "auto-reverted";
+          resolvedNow = true;
+          result.autoReverted = true;
+        } else {
+          // Mutation returned OK but the zone didn't switch (the SONOS silent
+          // no-op we used to record as success). Leave the alert OPEN and notify.
+          resolution = "auto-revert-failed";
+          result.error =
+            `auto-revert ${monitoredZone.id}: didn't take — still on ` +
+            `"${rev.observedPlayFromName ?? "another source"}"`;
+        }
       } catch (e) {
         result.error = `auto-revert ${monitoredZone.id}: ${(e as Error).message}`;
       }
     } else if (newRef?.id === monitoredZone.approvedPlayFromId) {
       resolution = "ignored:matches-baseline";
+      resolvedNow = true;
     }
   }
 
   if (resolution) {
     await prisma.alert.update({
       where: { id: alert.id },
-      data: { resolution, resolvedAt: new Date(), resolvedBy: "cron" },
+      // Only stamp resolvedAt/resolvedBy when actually handled; a failed
+      // auto-revert records the attempt but keeps the alert open.
+      data: {
+        resolution,
+        ...(resolvedNow ? { resolvedAt: new Date(), resolvedBy: "cron" } : {}),
+      },
     });
   }
 
-  const skipChat =
-    resolution === "auto-reverted" || resolution === "ignored:matches-baseline";
+  // Stay quiet only when we actually handled it; a failed revert must notify.
+  const skipChat = resolvedNow;
 
   if (!skipChat) {
     const fresh = await prisma.alert.findUniqueOrThrow({

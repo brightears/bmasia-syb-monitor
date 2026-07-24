@@ -503,26 +503,53 @@ export async function mutateZoneSettings(
   });
 }
 
-const ZONE_ASSIGN_SOURCE = `
-  mutation SoundZoneAssignSource($input: SoundZoneAssignSourceInput!) {
-    soundZoneAssignSource(input: $input) {
-      soundZones
-      source { __typename ... on Playlist { id name } ... on Schedule { id name } }
+// Change a zone's playback source. We use setPlayFrom, NOT soundZoneAssignSource:
+// "assign" only writes the assignment and silently no-ops on SONOS-paired zones,
+// whereas setPlayFrom actively changes playback and works across device types
+// (confirmed against BMAsia's Riff client + the live SetPlayFromInput schema —
+// { soundZone: ID!, source: ID! }). Payload carries no useful fields, so callers
+// verify the result by re-reading playFrom (see getSoundZonePlayFrom).
+const SET_PLAY_FROM = `
+  mutation SetPlayFrom($input: SetPlayFromInput!) {
+    setPlayFrom(input: $input) {
+      __typename
     }
   }
 `;
 
-export async function mutateAssignSource(
-  zoneIdOrIds: string | string[],
+export async function mutateSetPlayFrom(
+  zoneId: string,
   sourceId: string
-): Promise<{ id: string; name?: string; typeName?: string } | null> {
-  const soundZones = Array.isArray(zoneIdOrIds) ? zoneIdOrIds : [zoneIdOrIds];
-  const data = await graphql<{
-    soundZoneAssignSource: { soundZones: string[]; source: any };
-  }>(ZONE_ASSIGN_SOURCE, {
-    input: { soundZones, source: sourceId },
+): Promise<void> {
+  await graphql(SET_PLAY_FROM, {
+    input: { soundZone: zoneId, source: sourceId },
   });
-  const src = data.soundZoneAssignSource?.source;
-  if (!src) return null;
-  return { id: src.id, name: src.name, typeName: src.__typename };
+}
+
+// Read a single zone's current playFrom — used to VERIFY a revert actually took
+// (setPlayFrom returns nothing meaningful, and a 200 doesn't prove the zone
+// switched, especially on SONOS).
+const SOUND_ZONE_PLAY_FROM_QUERY = `
+  query SoundZonePlayFrom($id: ID!) {
+    soundZone(id: $id) {
+      id
+      playFrom { __typename ... on Playlist { id name } ... on Schedule { id name } }
+    }
+  }
+`;
+
+export async function getSoundZonePlayFrom(
+  zoneId: string
+): Promise<{ id: string; name: string | null; typeName: string | null } | null> {
+  const data = await graphql<{ soundZone: { playFrom: any } | null }>(
+    SOUND_ZONE_PLAY_FROM_QUERY,
+    { id: zoneId }
+  );
+  const pf = data.soundZone?.playFrom;
+  if (!pf) return null;
+  return {
+    id: pf.id,
+    name: pf.name ?? null,
+    typeName: pf.__typename ?? null,
+  };
 }

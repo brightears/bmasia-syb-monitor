@@ -2,12 +2,16 @@
  * Capture + compare the approved baseline (playFrom) for each zone.
  *
  *   - captureBaseline: pull current zone state from SYB and store as approved.
- *   - revertToBaseline: fire soundZoneAssignSource(approvedPlayFromId).
+ *   - revertToBaseline: setPlayFrom(approvedPlayFromId), then verify it took.
  *   - syncZoneInventory: refresh the Zone table for an account from SYB.
  */
 
 import { prisma } from "./prisma";
-import { getAccountWithZones, mutateAssignSource } from "./syb-queries";
+import {
+  getAccountWithZones,
+  mutateSetPlayFrom,
+  getSoundZonePlayFrom,
+} from "./syb-queries";
 
 export interface SyncResult {
   added: string[];
@@ -120,22 +124,42 @@ export async function captureBaseline(
 export async function revertToBaseline(zoneId: string): Promise<{
   reverted: boolean;
   playFromName: string | null;
+  observedPlayFromName: string | null;
 }> {
   const zone = await prisma.zone.findUniqueOrThrow({ where: { id: zoneId } });
   if (!zone.approvedPlayFromId) {
     throw new Error(`Zone ${zoneId} has no approved baseline.`);
   }
-  const result = await mutateAssignSource(zoneId, zone.approvedPlayFromId);
-  if (!result) {
-    return { reverted: false, playFromName: zone.approvedPlayFromName };
+
+  // setPlayFrom actively changes playback and works on SONOS-paired zones,
+  // unlike soundZoneAssignSource ("assign") which silently no-ops on SONOS.
+  await mutateSetPlayFrom(zoneId, zone.approvedPlayFromId);
+
+  // Don't trust the 200 — re-read the live playFrom and only claim success when
+  // it actually matches the approved baseline. Retry once to absorb brief
+  // propagation lag. This makes a revert truthful on every device: a SONOS
+  // no-op (or any other silent failure) now surfaces instead of being logged
+  // as done.
+  let live = await getSoundZonePlayFrom(zoneId);
+  if (live?.id !== zone.approvedPlayFromId) {
+    await new Promise((r) => setTimeout(r, 1500));
+    live = await getSoundZonePlayFrom(zoneId);
   }
+  const reverted = live?.id === zone.approvedPlayFromId;
+
   await prisma.zone.update({
     where: { id: zoneId },
     data: {
-      lastSeenPlayFromId: result.id,
-      lastSeenPlayFromName: result.name ?? zone.approvedPlayFromName,
-      driftDetectedAt: null,
+      lastSeenPlayFromId: live?.id ?? zone.lastSeenPlayFromId,
+      lastSeenPlayFromName: live?.name ?? zone.lastSeenPlayFromName,
+      // Only clear the drift flag if we confirmed the zone is back on baseline.
+      ...(reverted ? { driftDetectedAt: null } : {}),
     },
   });
-  return { reverted: true, playFromName: result.name ?? zone.approvedPlayFromName };
+
+  return {
+    reverted,
+    playFromName: zone.approvedPlayFromName,
+    observedPlayFromName: live?.name ?? null,
+  };
 }
