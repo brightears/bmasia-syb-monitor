@@ -238,62 +238,68 @@ export async function getAccountWithZones(
   };
 }
 
-const ACTIVITY_LOG_QUERY = `
-  query AccountActivityLog($id: ID!, $first: Int!, $after: String) {
-    account(id: $id) {
-      activityLog(first: $first, after: $after) {
-        total
-        edges {
-          cursor
-          node {
-            id
-            timestamp
-            action
-            description
-            actor {
-              entity {
-                __typename
-                ... on DeviceActor {
-                  device { id name type platform osVersion }
-                }
-                ... on UserActor {
-                  user { id name email }
-                }
-                ... on ActivityLogUserActor {
-                  user { id name email }
-                }
-                ... on InternalActor {
-                  name
-                }
-              }
-            }
-            diff {
-              type
-              diffEntity {
-                __typename
-                ... on ActivityLogJSONDiff { old new }
-                ... on ActivityLogReferenceDiff {
-                  old {
-                    __typename
-                    ... on PlaylistReference { playlist { id name } }
-                    ... on ScheduleReference { schedule { id name } }
-                    ... on DeviceReference { device { id name } }
-                    ... on TrackReference { track { id name } }
-                  }
-                  new {
-                    __typename
-                    ... on PlaylistReference { playlist { id name } }
-                    ... on ScheduleReference { schedule { id name } }
-                    ... on DeviceReference { device { id name } }
-                    ... on TrackReference { track { id name } }
-                  }
-                }
-              }
-            }
+// Fields selected on every ActivityLogItem (account- and zone-level logs).
+//
+// The `diffEntity` fragments MUST alias `old` / `new`. ActivityLogJSONDiff.old is
+// `JSON!` while ActivityLogReferenceDiff.old is `ActivityLogReference`, and GraphQL's
+// "fields in set can merge" rule forbids one response key with two types. SYB began
+// enforcing that rule around 2 Nov 2026 and rejected the whole query ("differing
+// types 'JSON!' and 'ActivityLogReference' for objectName 'old'"), which left the
+// poller reading nothing for two weeks. Keep the aliases.
+const ACTIVITY_LOG_REFERENCE_FIELDS = `
+  __typename
+  ... on PlaylistReference { playlist { id name } }
+  ... on ScheduleReference { schedule { id name } }
+  ... on DeviceReference { device { id name } }
+  ... on TrackReference { track { id name } }
+`;
+
+const ACTIVITY_LOG_CONNECTION_FIELDS = `
+  total
+  edges {
+    cursor
+    node {
+      id
+      timestamp
+      action
+      description
+      actor {
+        entity {
+          __typename
+          ... on DeviceActor {
+            device { id name type platform osVersion }
+          }
+          ... on UserActor {
+            user { id name email }
+          }
+          ... on ActivityLogUserActor {
+            user { id name email }
+          }
+          ... on InternalActor {
+            name
           }
         }
-        pageInfo { hasNextPage endCursor }
       }
+      diff {
+        type
+        diffEntity {
+          __typename
+          ... on ActivityLogJSONDiff { jsonOld: old jsonNew: new }
+          ... on ActivityLogReferenceDiff {
+            refOld: old { ${ACTIVITY_LOG_REFERENCE_FIELDS} }
+            refNew: new { ${ACTIVITY_LOG_REFERENCE_FIELDS} }
+          }
+        }
+      }
+    }
+  }
+  pageInfo { hasNextPage endCursor }
+`;
+
+export const ACTIVITY_LOG_QUERY = `
+  query AccountActivityLog($id: ID!, $first: Int!, $after: String) {
+    account(id: $id) {
+      activityLog(first: $first, after: $after) { ${ACTIVITY_LOG_CONNECTION_FIELDS} }
     }
   }
 `;
@@ -314,26 +320,15 @@ function normalizeDiff(rawDiff: any): SybActivityLogEntry["diff"] {
   const ent = rawDiff.diffEntity ?? {};
   const kind = ent?.__typename ?? rawDiff.type ?? null;
   if (kind === "ActivityLogJSONDiff") {
-    return { type: "json", old: ent.old ?? null, new: ent.new ?? null };
+    return { type: "json", old: ent.jsonOld ?? null, new: ent.jsonNew ?? null };
   }
   if (kind === "ActivityLogReferenceDiff") {
-    return { type: "reference", old: ent.old ?? null, new: ent.new ?? null };
+    return { type: "reference", old: ent.refOld ?? null, new: ent.refNew ?? null };
   }
   return { type: rawDiff.type ?? "unknown", old: null, new: null };
 }
 
-export async function fetchActivityLogPage(
-  accountId: string,
-  opts: { first?: number; after?: string | null } = {}
-): Promise<SybActivityLogPage> {
-  const first = opts.first ?? 50;
-  const after = opts.after ?? null;
-  const data = await graphql<{ account: any }>(ACTIVITY_LOG_QUERY, {
-    id: accountId,
-    first,
-    after,
-  });
-  const log = data.account?.activityLog;
+function toActivityLogPage(log: any): SybActivityLogPage {
   if (!log) {
     return { total: 0, endCursor: null, hasNextPage: false, entries: [] };
   }
@@ -353,66 +348,26 @@ export async function fetchActivityLogPage(
   };
 }
 
+export async function fetchActivityLogPage(
+  accountId: string,
+  opts: { first?: number; after?: string | null } = {}
+): Promise<SybActivityLogPage> {
+  const data = await graphql<{ account: any }>(ACTIVITY_LOG_QUERY, {
+    id: accountId,
+    first: opts.first ?? 50,
+    after: opts.after ?? null,
+  });
+  return toActivityLogPage(data.account?.activityLog);
+}
+
 // PLAY_FROM_CHANGED + most zone-touching events live on SoundZone.activityLog,
 // not Account.activityLog. Account.activityLog only surfaces account-scoped
 // events (ACCOUNT_SETTING_CHANGED, user-mgmt). For drift detection we poll
 // per-monitored-zone.
-const SOUND_ZONE_ACTIVITY_LOG_QUERY = `
+export const SOUND_ZONE_ACTIVITY_LOG_QUERY = `
   query SoundZoneActivityLog($id: ID!, $first: Int!, $after: String) {
     soundZone(id: $id) {
-      activityLog(first: $first, after: $after) {
-        total
-        edges {
-          cursor
-          node {
-            id
-            timestamp
-            action
-            description
-            actor {
-              entity {
-                __typename
-                ... on DeviceActor {
-                  device { id name type platform osVersion }
-                }
-                ... on UserActor {
-                  user { id name email }
-                }
-                ... on ActivityLogUserActor {
-                  user { id name email }
-                }
-                ... on InternalActor {
-                  name
-                }
-              }
-            }
-            diff {
-              type
-              diffEntity {
-                __typename
-                ... on ActivityLogJSONDiff { old new }
-                ... on ActivityLogReferenceDiff {
-                  old {
-                    __typename
-                    ... on PlaylistReference { playlist { id name } }
-                    ... on ScheduleReference { schedule { id name } }
-                    ... on DeviceReference { device { id name } }
-                    ... on TrackReference { track { id name } }
-                  }
-                  new {
-                    __typename
-                    ... on PlaylistReference { playlist { id name } }
-                    ... on ScheduleReference { schedule { id name } }
-                    ... on DeviceReference { device { id name } }
-                    ... on TrackReference { track { id name } }
-                  }
-                }
-              }
-            }
-          }
-        }
-        pageInfo { hasNextPage endCursor }
-      }
+      activityLog(first: $first, after: $after) { ${ACTIVITY_LOG_CONNECTION_FIELDS} }
     }
   }
 `;
@@ -421,31 +376,12 @@ export async function fetchSoundZoneActivityLogPage(
   soundZoneId: string,
   opts: { first?: number; after?: string | null } = {}
 ): Promise<SybActivityLogPage> {
-  const first = opts.first ?? 50;
-  const after = opts.after ?? null;
   const data = await graphql<{ soundZone: any }>(SOUND_ZONE_ACTIVITY_LOG_QUERY, {
     id: soundZoneId,
-    first,
-    after,
+    first: opts.first ?? 50,
+    after: opts.after ?? null,
   });
-  const log = data.soundZone?.activityLog;
-  if (!log) {
-    return { total: 0, endCursor: null, hasNextPage: false, entries: [] };
-  }
-  const entries: SybActivityLogEntry[] = (log.edges ?? []).map((e: any) => ({
-    id: e.node.id,
-    timestamp: e.node.timestamp,
-    action: e.node.action,
-    description: e.node.description ?? null,
-    actor: normalizeActor(e.node.actor),
-    diff: normalizeDiff(e.node.diff),
-  }));
-  return {
-    total: log.total,
-    endCursor: log.pageInfo?.endCursor ?? null,
-    hasNextPage: !!log.pageInfo?.hasNextPage,
-    entries,
-  };
+  return toActivityLogPage(data.soundZone?.activityLog);
 }
 
 // ───────────────────────────── Mutations (gated by caller) ─────────────────────────────

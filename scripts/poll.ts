@@ -10,7 +10,8 @@
 import { pollAllMonitoredAccounts } from "../src/lib/poll-core";
 import { prisma } from "../src/lib/prisma";
 
-async function onePass(): Promise<void> {
+/** Returns how many accounts are unhealthy (SYB unreadable past the alert threshold). */
+async function onePass(): Promise<number> {
   const start = Date.now();
   const results = await pollAllMonitoredAccounts();
   const totals = results.reduce(
@@ -18,32 +19,46 @@ async function onePass(): Promise<void> {
       acc.fetched += r.fetched;
       acc.alerts += r.alertsCreated;
       acc.reverted += r.autoReverted;
+      acc.stateCheck += r.stateCheckReverted;
+      acc.readErrors += r.readErrors.length;
       acc.errors += r.notificationErrors.length;
+      if (r.unhealthy) acc.unhealthy += 1;
       return acc;
     },
-    { fetched: 0, alerts: 0, reverted: 0, errors: 0 }
+    { fetched: 0, alerts: 0, reverted: 0, stateCheck: 0, readErrors: 0, errors: 0, unhealthy: 0 }
   );
   const elapsedSec = ((Date.now() - start) / 1000).toFixed(1);
   console.log(
     `[poll] ${results.length} accounts | ${totals.fetched} entries fetched | ` +
-      `${totals.alerts} new alerts | ${totals.reverted} auto-reverted | ${totals.errors} notify-errors | ${elapsedSec}s`
+      `${totals.alerts} new alerts | ${totals.reverted} auto-reverted (${totals.stateCheck} by state check) | ` +
+      `${totals.readErrors} read-errors | ${totals.errors} other-errors | ${elapsedSec}s`
   );
   for (const r of results) {
-    if (r.notificationErrors.length || r.alertsCreated > 0) {
+    if (r.readErrors.length || r.notificationErrors.length || r.alertsCreated > 0 || r.autoReverted > 0) {
       console.log(
         `  ${r.accountId}: fetched=${r.fetched} alerts=${r.alertsCreated} ` +
-          `reverted=${r.autoReverted} cursor=${r.cursorAdvanced ? "advanced" : "held"} ` +
-          (r.notificationErrors.length ? `errors=${r.notificationErrors.join("; ")}` : "")
+          `reverted=${r.autoReverted} state-check=${r.stateCheckReverted} ` +
+          `cursor=${r.cursorAdvanced ? "advanced" : "held"}` +
+          (r.unhealthy ? " UNHEALTHY" : "") +
+          (r.readErrors.length ? ` read-errors=${r.readErrors.join("; ")}` : "") +
+          (r.notificationErrors.length ? ` errors=${r.notificationErrors.join("; ")}` : "")
       );
     }
   }
+  return totals.unhealthy;
 }
 
 async function main(): Promise<void> {
   const once = process.argv.includes("--once");
   try {
     if (once) {
-      await onePass();
+      const unhealthy = await onePass();
+      if (unhealthy > 0) {
+        // Fail the run so Render shows it (and emails) instead of "successful"
+        // while nothing is being read. Readable accounts were still processed.
+        console.error(`[poll] ${unhealthy} account(s) unreadable past the alert threshold — exiting 1`);
+        process.exitCode = 1;
+      }
       return;
     }
     const intervalSec = parseInt(process.env.POLL_LOOP_INTERVAL_SECONDS ?? "600", 10);
