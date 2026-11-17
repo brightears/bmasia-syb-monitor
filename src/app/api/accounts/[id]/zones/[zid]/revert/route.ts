@@ -49,9 +49,13 @@ export async function POST(
       );
     }
 
-    // Mark all open PLAY_FROM_CHANGED alerts on this zone as resolved
+    // Mark all open drift alerts on this zone as resolved
     await prisma.alert.updateMany({
-      where: { zoneId: zid, action: "PLAY_FROM_CHANGED", resolvedAt: null },
+      where: {
+        zoneId: zid,
+        action: { in: ["PLAY_FROM_CHANGED", "PLAY_FROM_DRIFT"] },
+        resolvedAt: null,
+      },
       data: {
         resolution: "manual-reverted",
         resolvedAt: new Date(),

@@ -6,7 +6,8 @@ Service that monitors Soundtrack Your Brand (SYB) accounts for unauthorized play
 
 - **Prevention layer:** apply `staffControl=false`, `restrictEditMusic`, `restrictDiscoverMusic`, `restrictBlockTracks`, `restrictUnpairingFromPairedDevices`, `enableActivityLog` on opted-in accounts.
 - **Detection layer:** cron worker polls `account.activityLog` every 10 min, filters for `PLAY_FROM_CHANGED` / `ACCOUNT_SETTING_CHANGED` / `DEVICE_UNPAIRED` / `TRACK_BLOCKED`, and writes idempotent Alert rows.
-- **Recovery layer:** if `account.autoRevertEnabled`, fire `soundZoneAssignSource` to restore the approved baseline.
+- **Recovery layer:** if `account.autoRevertEnabled`, fire `setPlayFrom` to restore the approved baseline (then re-read `playFrom` to confirm it took).
+- **State check:** every tick, after the activity logs, compare each monitored zone's live `playFrom` with its baseline and revert drift the log missed (outage, missed tick, failed revert). Leaves a source alone when the zone's newest change was by an API client (`public_api`), same as the log path.
 - **UI:** Next.js dashboard for the BMAsia team — pick accounts, capture baselines, view alerts, toggle auto-revert.
 
 Full design: `docs/DESIGN.md`.
@@ -81,6 +82,11 @@ docs/
 ## Polling
 
 Cron job runs `npm run poll:once` every 10 min (Render cron). For local dev: `npm run poll` runs a continuous loop with `POLL_LOOP_INTERVAL_SECONDS` between passes.
+
+- `Account.lastPolledAt` = last tick where every SYB read succeeded. If reads keep failing for `POLL_FAILURE_ALERT_MINUTES` (default 20), the poller opens a `POLL_FAILED` alert, sends one ops message (Chat + Telegram) per outage plus a daily reminder, and `poll:once` exits 1 so Render shows the run as failed. It resolves itself on recovery.
+- Activity-log entries older than `POLL_STALE_EVENT_MINUTES` (default 30) are stored as `backfilled` and not acted on; the state check fixes the zone's current source instead.
+- Alert actions written by the app itself: `PLAY_FROM_DRIFT` (state check) and `POLL_FAILED`.
+- SYB enforces GraphQL's field-merge rule: aliases on the `diffEntity` `old`/`new` fields in `syb-queries.ts` are required (see the comment there). Removing them breaks every activity-log read.
 
 ## Local dev
 

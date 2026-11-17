@@ -47,6 +47,13 @@ function severityEmoji(sev: string): string {
   return "ℹ️";
 }
 
+/** Card/message headline. Not every alert is a staff edit any more. */
+function headline(action: string): string {
+  if (action === "POLL_FAILED") return "SYB Monitor can't read SYB";
+  if (action === "PLAY_FROM_DRIFT") return "SYB zone off baseline";
+  return "SYB drift detected";
+}
+
 function actorLabel(ctx: NotifyContext): string {
   const a = ctx.alert;
   if (a.actorType === "DeviceActor") {
@@ -65,10 +72,11 @@ function plainSummary(ctx: NotifyContext): string {
   const { account, zone, alert, appBaseUrl } = ctx;
   const link = appBaseUrl ? `${appBaseUrl}/alerts/${alert.id}` : null;
   const lines = [
-    `${severityEmoji(alert.severity)} SYB drift — ${account.businessName}`,
+    `${severityEmoji(alert.severity)} ${headline(alert.action)} — ${account.businessName}`,
     `Action: ${alert.action}${zone ? ` on zone "${zone.name}"` : ""}`,
     `By: ${actorLabel(ctx)}`,
     `Change: ${fmtDiff(alert.diffOld)} → ${fmtDiff(alert.diffNew)}`,
+    alert.description ? `Detail: ${alert.description}` : null,
     zone?.approvedPlayFromName ? `Baseline: ${zone.approvedPlayFromName}` : null,
     alert.resolution ? `Resolution: ${alert.resolution}` : null,
     link ? `View: ${link}` : null,
@@ -127,6 +135,12 @@ function buildChatCard(ctx: NotifyContext): ChatCard {
     },
   ];
 
+  if (alert.description) {
+    widgets.push({
+      decoratedText: { topLabel: "Detail", text: alert.description, wrapText: true },
+    });
+  }
+
   if (zone?.approvedPlayFromName) {
     widgets.push({
       decoratedText: {
@@ -165,7 +179,7 @@ function buildChatCard(ctx: NotifyContext): ChatCard {
         cardId: alert.id,
         card: {
           header: {
-            title: `${severityEmoji(alert.severity)} SYB drift detected`,
+            title: `${severityEmoji(alert.severity)} ${headline(alert.action)}`,
             subtitle: account.businessName,
           },
           sections: [{ widgets }],
@@ -193,9 +207,8 @@ async function postChat(webhook: string, ctx: NotifyContext): Promise<void> {
 async function postTelegram(
   botToken: string,
   chatId: string,
-  ctx: NotifyContext
+  text: string
 ): Promise<void> {
-  const text = plainSummary(ctx);
   const url = `https://api.telegram.org/bot${botToken}/sendMessage`;
   const res = await fetch(url, {
     method: "POST",
@@ -237,7 +250,51 @@ export async function dispatchAlert(ctx: NotifyContext): Promise<DispatchResult>
   const tgChat = ctx.account.telegramChatId ?? process.env.TELEGRAM_CHAT_ID;
   if (tgToken && tgChat) {
     try {
-      await postTelegram(tgToken, tgChat, ctx);
+      await postTelegram(tgToken, tgChat, plainSummary(ctx));
+      channels.push("telegram");
+    } catch (e) {
+      errors.push(`telegram: ${(e as Error).message}`);
+    }
+  }
+
+  if (channels.length === 0) {
+    errors.push("no alert channel configured (set CHAT_WEBHOOK_URL or TELEGRAM_*)");
+  }
+
+  return { channels, errors };
+}
+
+/**
+ * Plain-text ops message to the default Chat space + Telegram chat, for things
+ * that aren't one account's alert (e.g. "the poller can't read SYB").
+ */
+export async function dispatchOpsMessage(text: string): Promise<DispatchResult> {
+  const channels: string[] = [];
+  const errors: string[] = [];
+
+  const chatWebhook = process.env.CHAT_WEBHOOK_URL;
+  if (chatWebhook) {
+    try {
+      const res = await fetch(chatWebhook, {
+        method: "POST",
+        headers: { "Content-Type": "application/json; charset=UTF-8" },
+        body: JSON.stringify({ text }),
+      });
+      if (!res.ok) {
+        const body = await res.text().catch(() => "");
+        throw new Error(`Chat webhook ${res.status}: ${body.slice(0, 300)}`);
+      }
+      channels.push("chat");
+    } catch (e) {
+      errors.push(`chat: ${(e as Error).message}`);
+    }
+  }
+
+  const tgToken = process.env.TELEGRAM_BOT_TOKEN;
+  const tgChat = process.env.TELEGRAM_CHAT_ID;
+  if (tgToken && tgChat) {
+    try {
+      await postTelegram(tgToken, tgChat, text);
       channels.push("telegram");
     } catch (e) {
       errors.push(`telegram: ${(e as Error).message}`);

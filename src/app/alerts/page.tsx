@@ -130,7 +130,7 @@ export default async function AlertsPage(props: {
                   {a.resolvedAt === null && (
                     <AlertRowActions
                       alertId={a.id}
-                      canRevert={a.action === "PLAY_FROM_CHANGED" && a.zoneId !== null}
+                      canRevert={(a.action === "PLAY_FROM_CHANGED" || a.action === "PLAY_FROM_DRIFT") && a.zoneId !== null}
                       accountId={a.accountId}
                       zoneId={a.zoneId}
                     />

@@ -73,7 +73,7 @@ export default async function AlertDetail(props: { params: Promise<{ id: string 
         {alert.resolvedAt === null && (
           <AlertRowActions
             alertId={alert.id}
-            canRevert={alert.action === "PLAY_FROM_CHANGED" && alert.zoneId !== null}
+            canRevert={(alert.action === "PLAY_FROM_CHANGED" || alert.action === "PLAY_FROM_DRIFT") && alert.zoneId !== null}
             accountId={alert.accountId}
             zoneId={alert.zoneId}
           />
